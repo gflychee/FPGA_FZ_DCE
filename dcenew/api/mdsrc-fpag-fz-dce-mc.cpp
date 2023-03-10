@@ -92,136 +92,81 @@ struct DepthMarketDataField
 };
 
 #pragma pack(pop)
-
+constexpr double precision = 0.000001;
 std::map<std::string, DepthMarketDataField> mdmap;
 
 FILE *ofile = NULL;
 
-// pthread_spinlock_t write_lock;
-// struct exanic_shfe_mc_client {
-// 	struct mdclient mdclient;
-// 	char   udp_only_ifr[64];
-// 	char   udp_tcp_ifr[64];
+pthread_spinlock_t write_lock;
+struct exanic_dce_mc_client {
+	struct mdclient mdclient;
+	char   lv1_exanic[64];
+	char   lv2_exanic[64];
+	int    debug;
+	int    merge;
 
-// 	// shfe market data tcp&udp address, to filter in exanic
-// 	struct in_addr *tcp_srv;
-// 	int            *tcp_port;
-// 	struct in_addr *udp_srv;
-// 	int            *udp_port;
+	exanic_dce_mc_client();
 
-// 	MIRP mirps[4][2];
-// 	map<uint16_t, TCPQuery> tcpq_map;
+	static void *recv_udp_lv1(void *arg);
 
-// 	static const int TCP_SRV_NUM = 2;
-// 	static const int UDP_SRV_NUM = 8;
+	void run_lv1_thread();
+};
 
-// 	exanic_shfe_mc_client();
+void exanic_dce_mc_client::run_lv1_thread() {
+	pthread_t lv1_thread;
+	pthread_create(&lv1_thread, NULL, recv_udp_lv1, this);
+}
 
-// 	static void *recv_udp_and_tcp(void *arg);
-// 	static void *recv_udp_only(void *arg);
+fabs(premd[data->InstrumentID].LastPrice - data->LastPrice) < precision && premd[data->InstrumentID].Volume == data->Volume &&
+            fabs(premd[data->InstrumentID].Turnover - data->Turnover) < precision && fabs(premd[data->InstrumentID].OpenInterest - data->OpenInterest) < precision &&
+            fabs(premd[data->InstrumentID].BidPrice1 - data->BidPrice1) < precision && premd[data->InstrumentID].BidVolume1 == data->BidVolume1 &&
+            fabs(premd[data->InstrumentID].AskPrice1 - data->AskPrice1) < precision && premd[data->InstrumentID].AskVolume1 == data->AskVolume1
 
-// 	void run_tcp_thread();
-// 	void raw_parse_ether(struct timespec *ts, void *pkt, int len);
-// 	void polling_udp(const char *buf, int len, int islast);
-// 	void polling_udp_and_tcp(const char *buf, int len, int islast);
-// };
+void *exanic_dce_mc_client::recv_udp_lv1(void *arg) {
+	printf("start receiving udp lv1...\n");
 
-// void exanic_shfe_mc_client::run_tcp_thread() {
-// 	pthread_t udp_and_tcp_thread;
-// 	pthread_create(&udp_and_tcp_thread, NULL, recv_udp_and_tcp, this);
-// }
+	struct exanic_dce_mc_client *self = (struct exanic_dce_mc_client *)arg;
 
-// void *exanic_shfe_mc_client::recv_udp_and_tcp(void *arg) {
-// 	printf("start receiving shfe including tcp and A&B udp...\n");
+	printf("ifname = %s\n", self->lv1_exanic);
 
-// 	struct exanic_shfe_mc_client *self = (struct exanic_shfe_mc_client *)arg;
-// 	char *ifname = self->udp_tcp_ifr;
-// 	fprintf(stderr, "ifname = %s\n", ifname);
+	exanic_t *nic = exanic_acquire_handle(self->lv1_exanic);
 
-// 	char device[16];
-// 	int port_number;
-// 	if (exanic_find_port_by_interface_name(ifname, device, sizeof(device), &port_number) != 0 
-// 		&& parse_device_port(ifname, device, &port_number) != 0) {
-// 		printf("error: no such interface or not an exanic:%s\n", ifname);
-// 		return NULL;
-// 	}
+	if (!nic) {
+        printf("failed to acquire NIC handle:%s\n", exanic_get_last_error());
+        return NULL;
+    }
 
-// 	exanic_t *exanic = exanic_acquire_handle(device);
-// 	if (!exanic) {
-// 		printf("error: exanic acquire handle %s: %s\n", device,
-// 			exanic_get_last_error());
-// 		return NULL;
-// 	}
+    exanic_rx_t *rx1 = exanic_acquire_rx_buffer(nic, 1, 0);
 
-// 	exanic_rx_t *rx = exanic_acquire_unused_filter_buffer(exanic, port_number);
+    char rxbuf[1024];
 
-// 	if (!rx) {
-// 		printf("error: exanic acquire buffer %s: %s\n", device, exanic_get_last_error());
-// 		return NULL;
-// 	}
+    memset(rxbuf, 0, sizeof(rxbuf));
 
-// 	exanic_ip_filter_t filter;
-
-// 	filter.protocol = IPPROTO_TCP;
-// 	for (int i = 0; i < TCP_SRV_NUM; i++) {
-// 		filter.src_addr = self->tcp_srv[i].s_addr;
-// 		filter.src_port = htons(self->tcp_port[i]);
-// 		filter.dst_addr = 0;
-// 		filter.dst_port = 0;
-// 		exanic_filter_add_ip(exanic, rx, &filter);
-// 	}
-
-// 	filter.protocol = IPPROTO_UDP;
-// 	for (int i = 0; i < UDP_SRV_NUM; i++) {
-// 		filter.src_addr = 0;
-// 		filter.src_port = 0;
-// 		filter.dst_addr = self->udp_srv[i].s_addr;
-// 		filter.dst_port = htons(self->udp_port[i]);
-// 		exanic_filter_add_ip(exanic, rx, &filter);
-// 	}
-
-// 	exanic_cycles32_t timestamp;
-// 	union {
-// 		struct rx_chunk_info info;
-// 		uint64_t data;
-// 	} u;
-// 	while (1) {
-// 		u.data = rx->buffer[rx->next_chunk].u.data;
-
-// 		if (u.info.generation == rx->generation) {
-// 			while (1) {
-// 				const char *payload = (char *)rx->buffer[rx->next_chunk].payload;
-// 				rx->next_chunk++;
-// 				if (rx->next_chunk == EXANIC_RX_NUM_CHUNKS) {
-// 					rx->next_chunk = 0;
-// 					rx->generation++;
-// 				}
-
-// 				if (u.info.length != 0) {
-// 					self->polling_udp_and_tcp(payload, u.info.length, 1);
-// 					break;
-// 				} else {
-// 					self->polling_udp_and_tcp(payload, EXANIC_RX_CHUNK_PAYLOAD_SIZE, 0);
-// 					do 
-// 						u.data = rx->buffer[rx->next_chunk].u.data;
-// 					while (u.info.generation == (uint8_t)(rx->generation - 1));
-// 					if (u.info.generation != rx->generation) {
-// 						printf("error: data got lapped\n");
-// 						__exanic_rx_catchup(rx);
-// 						break;
-// 					}
-// 				}
-// 			} // while
-// 		} else if (u.info.generation == (uint8_t)(rx->generation - 1)) {
-// 			// TODO: no new packet
-// 		} else {
-// 			printf("error: data got lapped\n");
-// 			__exanic_rx_catchup(rx);
-// 		}
-// 	} // poll
-
-// 	return NULL;
-// }
+    while(1) {
+        ssize_t size = exanic_receive_frame(rx1, rxbuf, sizeof(rxbuf), 0);
+		if (size > 0) {
+	    	if (*(uint32_t *)rxbuf == 33554432) {
+				dce_lv1_t *dce_lv1 = (dce_lv1_t *)rxbuf;
+				printf("%u,%u,%u,%s,%ld,%u,%ld,%u,%ld,%u,%u,%ld,%u,%u,%ld,%ld\n",
+                    dce_lv1->counter,
+                    dce_lv1->contract_idx,
+                    dce_lv1->seq_no,
+                    dce_lv1->contract_name,
+                    dce_lv1->last_px,
+                    dce_lv1->last_qty,
+                    dce_lv1->turnover,
+                    dce_lv1->open_interest,
+                    dce_lv1->bid_px,
+                    dce_lv1->bid_qty,
+                    dce_lv1->bid_imply_qty,
+                    dce_lv1->ask_px,
+                    dce_lv1->ask_qty,
+                    dce_lv1->ask_imply_qty);
+	    	}
+		}
+    }
+	return NULL;
+}
 
 void WriteMd1(DepthMarketDataField *md) {
     if (strlen(md->InstrumentID) == 0) {
@@ -364,33 +309,30 @@ void packetHandler(uint8_t * packet, ssize_t size)
     }
 }
 
-int main(int argc, char *argv[])
-{
-    if (argc != 3)
-    {
-        fprintf(stderr, "Usage: %s exanic[0-N] filename\n", argv[0]);
-        return -1;
-    }
+static void run(struct mdclient *client) {
+	pthread_spin_init(&write_lock, 0);
+	struct exanic_dce_mc_client *exanic_mc = (struct exanic_dce_mc_client *)client->container;
+	//pclient = &(exanic_mc->mdclient);
+	pclient = client;
 
-    /* acquire exanic device handle */
-    exanic_t *nic = exanic_acquire_handle(argv[1]);
+	exanic_mc->run_lv1_thread();
+
+	/* acquire exanic device handle */
+    exanic_t *nic = exanic_acquire_handle(exanic_mc->lv2_exanic);
     if (!nic)
     {
-        fprintf(stderr, "exanic_acquire_handle: %s\n", exanic_get_last_error());
-        return -1;
+        printf("exanic_acquire_handle: %s\n", exanic_get_last_error());
+        fflush(stdout);
+        return;
     }
 
     /* fpga upload data to port1, acquire rx buffer to receive data */
     exanic_rx_t *rx = exanic_acquire_rx_buffer(nic, 1, 0);
     if (!rx)
     {
-        fprintf(stderr, "exanic_acquire_rx_buffer: %s\n", exanic_get_last_error());
-        return -1;
-    }
-
-    ofile = fopen(argv[2], "w");
-    if (ofile == NULL) {
-        return -1;
+        printf("exanic_acquire_rx_buffer: %s\n", exanic_get_last_error());
+        fflush(stdout);
+        return;
     }
 
     ssize_t size = 0;
@@ -406,38 +348,34 @@ int main(int argc, char *argv[])
             packetHandler(buf, size);
         }
     }
-    
-    return 0;
 }
 
-// static struct mdclient *exanic_shfe_mc_create(cfg_t *cfg, struct memdb *memdb) {
-// 	struct exanic_shfe_mc_client *exanic_mc = new struct exanic_shfe_mc_client();
-// 	struct mdclient *client = &exanic_mc->mdclient;
+static struct mdclient *exanic_dce_mc_create(cfg_t *cfg, struct memdb *memdb) {
+	struct exanic_dce_mc_client *exanic_mc = new struct exanic_dce_mc_client();
+	struct mdclient *client = &exanic_mc->mdclient;
 
-// 	mdclient_init(client, cfg, memdb);
+	mdclient_init(client, cfg, memdb);
 
-// 	for (int i = 0; i < MAX_INSTRUMENT_NR; ++i) {
-// 		exchtime_prev[i] = LONG_MIN;
-// 	}
+	const char *lv1_exanic;
+	cfg_get_string(cfg, "lv1_exanic", &lv1_exanic);
+	snprintf(exanic_mc->lv1_exanic, sizeof(exanic_mc->lv1_exanic), "%s", lv1_exanic);
+	const char *lv2_exanic;
+	cfg_get_string(cfg, "lv2_exanic", &lv2_exanic);
+	snprintf(exanic_mc->lv2_exanic, sizeof(exanic_mc->lv2_exanic), "%s", lv2_exanic);
+	cfg_get_int(cfg, "debug", &exanic_mc->debug);
+	cfg_get_int(cfg, "merge", &exanic_mc->merge);
 
-// 	const char *udp_only_ifr;
-// 	cfg_get_string(cfg, "udp_only_ifr", &udp_only_ifr);
-// 	snprintf(exanic_mc->udp_only_ifr, sizeof(exanic_mc->udp_only_ifr), "%s", udp_only_ifr);
-// 	const char *udp_tcp_ifr;
-// 	cfg_get_string(cfg, "udp_tcp_ifr", &udp_tcp_ifr);
-// 	snprintf(exanic_mc->udp_tcp_ifr, sizeof(exanic_mc->udp_tcp_ifr), "%s", udp_tcp_ifr);
+	client->run = run;
+	client->decoder = NULL;
+	client->flags = 0;
+	client->container = exanic_mc;
 
-// 	client->run = run;
-// 	client->decoder = NULL;
-// 	client->flags = 0;
-// 	client->container = exanic_mc;
+	return client;
+}
 
-// 	return client;
-// }
+static struct mdsrc_module mdsrc_exanic_dce_mc = {
+	.create = exanic_dce_mc_create,
+	.api = "exanic-dce-mc"
+};
 
-// static struct mdsrc_module mdsrc_exanic_shfe_mc = {
-// 	.create = exanic_shfe_mc_create,
-// 	.api = "exanic-shfe-mc"
-// };
-
-// mdsrc_module_register(&mdsrc_exanic_shfe_mc);
+mdsrc_module_register(&mdsrc_exanic_dce_mc);
